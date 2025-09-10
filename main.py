@@ -8,7 +8,19 @@ frame_height = int(cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
 # variables for the input grid to simplify calculations
 GRID_W = 16
-GRID_H = 4
+GRID_H = 9
+
+# resize input frame to 1280x720 to standardize
+PROC_W = 1280
+PROC_H = 720
+
+def prep_frame(frame):
+    return cv2.resizeWindow(frame, (PROC_W, PROC_H), interpolation=cv2.INTER_AREA)
+
+def cell_dimensions():
+    CELL_W = PROC_W // GRID_W
+    CELL_H = PROC_H // GRID_H
+    return CELL_W, CELL_H
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (frame_width, frame_height))
