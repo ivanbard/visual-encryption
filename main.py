@@ -54,6 +54,8 @@ while True:
         draw_grid(frame)
     cv2.imshow('Webcam', frame)
 
+    if cv2.waitKey(1) == ord('g'): # this button press is iffy, sometimes requires double presses
+        show_grid = not show_grid
     if cv2.waitKey(1) == ord('q'): #press q to exit
         break
 
