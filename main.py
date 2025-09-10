@@ -14,6 +14,8 @@ GRID_H = 9
 PROC_W = 1280
 PROC_H = 720
 
+show_grid = True
+
 def prep_frame(frame):
     return cv2.resizeWindow(frame, (PROC_W, PROC_H), interpolation=cv2.INTER_AREA)
 
@@ -22,6 +24,20 @@ def cell_dimensions():
     CELL_W = PROC_W // GRID_W
     CELL_H = PROC_H // GRID_H
     return CELL_W, CELL_H
+
+def draw_grid(img, color=(0,255,0), thickness=2):
+    h, w = img.shape[:2]
+    cw, ch = cell_dimensions()
+
+    for gx in range(1, GRID_W):
+        x = gx * cw
+        cv2.line(img, (x, 0), (x, h), color, thickness)
+    # horizontal lines
+    for gy in range(1, GRID_H):
+        y = gy * ch
+        cv2.line(img, (0, y), (w, y), color, thickness)
+    
+    return img
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (frame_width, frame_height))
@@ -34,6 +50,8 @@ print(f"Cells are: {cw}x{ch}")
 while True:
     ret, frame = cam.read()
     out.write(frame)
+    if show_grid:
+        draw_grid(frame)
     cv2.imshow('Webcam', frame)
 
     if cv2.waitKey(1) == ord('q'): #press q to exit
