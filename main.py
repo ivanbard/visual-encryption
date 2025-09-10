@@ -17,6 +17,7 @@ PROC_H = 720
 def prep_frame(frame):
     return cv2.resizeWindow(frame, (PROC_W, PROC_H), interpolation=cv2.INTER_AREA)
 
+# the dimensions of the cells within the simplified grid
 def cell_dimensions():
     CELL_W = PROC_W // GRID_W
     CELL_H = PROC_H // GRID_H
@@ -24,6 +25,10 @@ def cell_dimensions():
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (frame_width, frame_height))
+
+cw, ch = cell_dimensions()
+print(f"Process dims: {PROC_W} x {PROC_H}")
+print(f"Cells are: {cw}x{ch}")
 
 #run a loop until input to close
 while True:
