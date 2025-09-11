@@ -85,7 +85,27 @@ def extract_bits_from_feats(stats, mean_deltas, mean_lsb=2, delta_lsb=2):
     #means to ints to LSBs
     m_int = (means * M_SCALE).astype(np.int64)
     for val in m_int.flatten():
-        bits.extend(_lsb_bits_from_int(int(val), mean_lsb)
+        bits.extend(lsb_bits_from_int(int(val), mean_lsb))
+
+    #deltas to ints to LSBs
+    d_int = (deltas * D_SCALE).astype(np.int64)
+    for val in d_int.flatten():
+        bits.extend(lsb_bits_from_int(int(val), delta_lsb))
+    return bits
+
+def bits_to_bytes(bits):
+    out = bytearray()
+    byte = 0
+    count = 0
+    for b in bits:
+        byte = (byte << 1) | (b&1)
+        count += 1
+        if count == 8:
+            out.append(byte)
+            byte, count = 0, 0
+    if count > 0: #left overs padded with 0s
+        out.append(byte << (8 - count))
+    return bytes(out)
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (frame_width, frame_height))
@@ -106,6 +126,10 @@ while True:
     stats = extract_cell_strats(frame)
     mean_deltas = compute_mean_deltas(stats, prev_stats)
     prev_stats = stats
+
+    # bits to bytes
+    raw_bits = extract_bits_from_feats(stats, mean_deltas, mean_lsb=2, delta_lsb=2)
+    raw_bytes = bits_to_bytes(raw_bits)
 
     # begins to show cell stats of the top right cell after 10 seconds
     frame_count = int(cam.get(cv2.CAP_PROP_FRAME_COUNT))
