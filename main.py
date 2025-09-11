@@ -68,6 +68,25 @@ def compute_mean_deltas(curr_stats, prev_stats):
         return np.zeros((GRID_H*GRID_W, 3), dtype=np.float32)
     return np.abs(curr_stats[:, 0:3] - prev_stats[:, 0:3])
 
+def lsb_bits_from_int(x, k):
+    #return list of k LSBs
+    return [(x >> i) & 1 for i in range(k)]
+
+def extract_bits_from_feats(stats, mean_deltas, mean_lsb=2, delta_lsb=2):
+    # stats: (Ncells, 6) floats; mean_deltas: (Ncells, 3) floats
+    bits = []
+    # scale factors tuned to spread vals over ints
+    M_SCALE = 1024
+    D_SCALE = 1024
+
+    means = stats[:, 0:3]
+    deltas = mean_deltas
+
+    #means to ints to LSBs
+    m_int = (means * M_SCALE).astype(np.int64)
+    for val in m_int.flatten():
+        bits.extend(_lsb_bits_from_int(int(val), mean_lsb)
+
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (frame_width, frame_height))
 
