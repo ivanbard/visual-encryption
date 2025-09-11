@@ -16,6 +16,7 @@ PROC_W = 1280
 PROC_H = 720
 
 show_grid = True
+prev_stats = None
 
 def prep_frame(frame):
     return cv2.resizeWindow(frame, (PROC_W, PROC_H), interpolation=cv2.INTER_AREA)
@@ -62,6 +63,11 @@ def extract_cell_strats(frame):
             idx += 1
     return stats
 
+def compute_mean_deltas(curr_stats, prev_stats):
+    if prev_stats is None:
+        return np.zeros((GRID_H*GRID_W, 3), dtype=np.float32)
+    return np.abs(curr_stats[:, 0:3] - prev_stats[:, 0:3])
+
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (frame_width, frame_height))
 
@@ -77,11 +83,17 @@ while True:
         draw_grid(frame)
     cv2.imshow('Webcam', frame)
 
+    # inter-frame deltas to increase entropy through motion
+    stats = extract_cell_strats(frame)
+    mean_deltas = compute_mean_deltas(stats, prev_stats)
+    prev_stats = stats
+
     # begins to show cell stats of the top right cell after 10 seconds
     frame_count = int(cam.get(cv2.CAP_PROP_FRAME_COUNT))
     if frame_count % 10 == 0:
         s = extract_cell_strats(frame)
         print("CELL(0,0) means/vars: ", s[0, :])
+        print("avg mmean-delta per channel: ", mean_deltas.mean(axis=0))
 
     if cv2.waitKey(1) == ord('g'): # this button press is iffy, sometimes requires double presses
         show_grid = not show_grid
