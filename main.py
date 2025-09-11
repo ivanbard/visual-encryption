@@ -43,7 +43,24 @@ def draw_grid(img, color=(0,255,0), thickness=2):
 
 # cell content extraction
 def extract_cell_strats(frame):
-    
+    h, w = frame.shape[:2]
+    cw, ch = cell_dimensions()
+    stats = np.zeros((GRID_H*GRID_W, 6), dtype=np.float32)
+    idx = 0
+
+    for gy in range(GRID_H):
+        y0, y1 = gy*ch, (gy+1)*ch
+        for gx in range(GRID_W):
+            x0, x1 = gx*cw, (gx+1)*cw
+            cell = frame[y0:y1, x0:x1]
+
+            # means/vars per channel
+            means = cell.mean(axis=(0,1)) # B, G, R
+            vars_ = cell.var(axis=(0,1))
+            stats[idx, 0:3] = means
+            stats[idx, 3:6] = vars_
+            idx += 1
+    return stats
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (frame_width, frame_height))
@@ -60,9 +77,15 @@ while True:
         draw_grid(frame)
     cv2.imshow('Webcam', frame)
 
+    # begins to show cell stats of the top right cell after 10 seconds
+    frame_count = int(cam.get(cv2.CAP_PROP_FRAME_COUNT))
+    if frame_count % 10 == 0:
+        s = extract_cell_strats(frame)
+        print("CELL(0,0) means/vars: ", s[0, :])
+
     if cv2.waitKey(1) == ord('g'): # this button press is iffy, sometimes requires double presses
         show_grid = not show_grid
-    if cv2.waitKey(1) == ord('q'): #press q to exit
+    elif cv2.waitKey(1) == ord('q'): #press q to exit
         break
 
 # release capture and writers
