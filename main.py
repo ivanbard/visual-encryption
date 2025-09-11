@@ -1,4 +1,5 @@
 import cv2
+import numpy as np
 
 # using default camera 
 cam = cv2.VideoCapture(0)
@@ -25,6 +26,7 @@ def cell_dimensions():
     CELL_H = PROC_H // GRID_H
     return CELL_W, CELL_H
 
+# grid creation to showcase cells
 def draw_grid(img, color=(0,255,0), thickness=2):
     h, w = img.shape[:2]
     cw, ch = cell_dimensions()
@@ -38,6 +40,10 @@ def draw_grid(img, color=(0,255,0), thickness=2):
         cv2.line(img, (0, y), (w, y), color, thickness)
     
     return img
+
+# cell content extraction
+def extract_cell_strats(frame):
+    
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (frame_width, frame_height))
