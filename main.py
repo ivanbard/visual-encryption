@@ -232,3 +232,9 @@ while True:
 cam.release()
 out.release()
 cv2.destroyAllWindows()
+
+
+# things to add:
+# - mix with OS randomness?
+# - set up camera controls and stability through openCV cam.set
+# - set up a system for dumping pre-hash bytes for 1 min, and run a randomness test on it
