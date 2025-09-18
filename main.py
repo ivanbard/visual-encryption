@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import hashlib, time
 
 # using default camera 
 cam = cv2.VideoCapture(0)
@@ -15,8 +16,18 @@ GRID_H = 9
 PROC_W = 1280
 PROC_H = 720
 
+# capture 12 back-to-back frames, 2.4 s per cycle, one cycle per min
+# use the collected frames to concatenate raw bytes and hash into a seed
+FRAMES_PER_CYCLE = 12 
+FRAME_GAP_S = 0.2
+CYCLES_PERIOD_S = 60.0
+
 show_grid = True
 prev_stats = None
+
+cycle_buf = bytearray()
+frames_this_cycle = 0
+last_cycle_time = time.time()
 
 def prep_frame(frame):
     return cv2.resizeWindow(frame, (PROC_W, PROC_H), interpolation=cv2.INTER_AREA)
@@ -106,6 +117,13 @@ def bits_to_bytes(bits):
     if count > 0: #left overs padded with 0s
         out.append(byte << (8 - count))
     return bytes(out)
+
+def start_cycle():
+    return bytearray(), 0
+
+def add_frame_to_cycle(cycle_buf, raw_bytes):
+    cycle_buf.extend(raw_bytes)
+    return cycle_buf
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (frame_width, frame_height))
