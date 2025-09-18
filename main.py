@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import hashlib, time
+from collections import deque
 
 # using default camera 
 cam = cv2.VideoCapture(0)
@@ -21,6 +22,10 @@ PROC_H = 720
 FRAMES_PER_CYCLE = 12 
 FRAME_GAP_S = 0.2
 CYCLES_PERIOD_S = 60.0
+
+FRAME_VAR_MIN = 5.0 # global variance below this means a bad frame (too similar colors)
+CYCLE_DELTA_MIN = 0.5 # mean delta per channel lower than this means bad cycle if shared between frames
+RECENT_SEEDS = deque(maxlen=50)
 
 show_grid = True
 prev_stats = None
@@ -129,6 +134,23 @@ def finish_cycle(cycle_buf):
     #SHA3-256 econditioning for seed
     seed = hashlib.sha3_256(cycle_buf).digest()
     return seed
+
+def frame_passes_variance(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    v = gray.var()
+    return v >= FRAME_VAR_MIN, v
+
+def cycle_passes_motion(delta_history):
+    if not delta_history: return False, 0.0
+    avg = sum(delta_history) / len(delta_history)
+    return avg >= CYCLE_DELTA_MIN, avg
+
+def seed_is_new(seed):
+    hx = seed.hex()
+    if hx in RECENT_SEEDS:
+        return False
+    RECENT_SEEDS.append(hx)
+    return True
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (frame_width, frame_height))
