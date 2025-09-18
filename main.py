@@ -125,6 +125,11 @@ def add_frame_to_cycle(cycle_buf, raw_bytes):
     cycle_buf.extend(raw_bytes)
     return cycle_buf
 
+def finish_cycle(cycle_buf):
+    #SHA3-256 econditioning for seed
+    seed = hashlib.sha3_256(cycle_buf).digest()
+    return seed
+
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (frame_width, frame_height))
 
@@ -148,6 +153,24 @@ while True:
     # bits to bytes
     raw_bits = extract_bits_from_feats(stats, mean_deltas, mean_lsb=2, delta_lsb=2)
     raw_bytes = bits_to_bytes(raw_bits)
+
+    #cycle in-loop logic
+    if frames_this_cycle == 0:
+        cycle_buf, frames_this_cycle = start_cycle()
+
+    cycle_buf = add_frame_to_cycle(cycle_buf, raw_bytes)
+    frames_this_cycle += 1
+
+    time.sleep(FRAME_GAP_S)
+
+    if frames_this_cycle >= FRAMES_PER_CYCLE:
+        seed = finish_cycle(cycle_buf)
+        print("Seed (hex): ", seed.hex())
+        # reset timing to stick to the one cycle per min
+        sleep_left = max(0.0, CYCLES_PERIOD_S - FRAMES_PER_CYCLE*FRAME_GAP_S)
+        time.sleep(sleep_left)
+        cycle_buf, frames_this_cycle = start_cycle()
+        last_cycle_time = time.time()
 
     # begins to show cell stats of the top right cell after 10 seconds
     frame_count = int(cam.get(cv2.CAP_PROP_FRAME_COUNT))
