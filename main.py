@@ -194,6 +194,28 @@ while True:
         cycle_buf, frames_this_cycle = start_cycle()
         last_cycle_time = time.time()
 
+    delta_history = []
+    # per frame:
+    delta_scalar = float(mean_deltas.mean())
+    delta_history.append(delta_scalar)
+
+    # per frame: drop bad frames
+    ok_var, var_val = frame_passes_variance(frame)
+    if not ok_var:
+        continue
+
+    # on cycle end:
+    ok_motion, avg_delta = cycle_passes_motion(delta_history)
+    if not ok_motion:
+        print(f"[WARN] Low motion/entropy this cycle (avg delta {avg_delta:.3f}); discarding.")
+    else:
+        seed = finish_cycle(cycle_buf)
+        if not seed_is_new(seed):
+            print("[WARN] Seed repeated; discarding.")
+        else:
+            print("Seed (hex):", seed.hex())
+    delta_history = []
+
     # begins to show cell stats of the top right cell after 10 seconds
     frame_count = int(cam.get(cv2.CAP_PROP_FRAME_COUNT))
     if frame_count % 10 == 0:
