@@ -1,10 +1,18 @@
 import cv2
 import numpy as np
-import hashlib, time
+import hashlib, time, os
 from collections import deque
 
 # using default camera 
 cam = cv2.VideoCapture(0)
+
+# Set camera properties for stability and consistent quality
+cam.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # Disable auto-exposure for consistency
+cam.set(cv2.CAP_PROP_EXPOSURE, -6)  # Set manual exposure
+cam.set(cv2.CAP_PROP_AUTOFOCUS, 0)  # Disable autofocus
+cam.set(cv2.CAP_PROP_AUTO_WB, 1)  # Keep auto white balance for color diversity
+cam.set(cv2.CAP_PROP_BRIGHTNESS, 128)  # Set consistent brightness
+cam.set(cv2.CAP_PROP_CONTRAST, 128)  # Set consistent contrast
 
 frame_width = int(cam.get(cv2.CAP_PROP_FRAME_WIDTH))
 frame_height = int(cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -26,6 +34,7 @@ CYCLES_PERIOD_S = 60.0
 FRAME_VAR_MIN = 5.0 # global variance below this means a bad frame (too similar colors)
 CYCLE_DELTA_MIN = 0.5 # mean delta per channel lower than this means bad cycle if shared between frames
 RECENT_SEEDS = deque(maxlen=50)
+SAVE_ENTROPY_DATA = False  # Set to True to save raw entropy for testing
 
 show_grid = True
 prev_stats = None
@@ -33,9 +42,10 @@ prev_stats = None
 cycle_buf = bytearray()
 frames_this_cycle = 0
 last_cycle_time = time.time()
+delta_history = []  # Move this outside the loop
 
 def prep_frame(frame):
-    return cv2.resizeWindow(frame, (PROC_W, PROC_H), interpolation=cv2.INTER_AREA)
+    return cv2.resize(frame, (PROC_W, PROC_H), interpolation=cv2.INTER_AREA)
 
 # the dimensions of the cells within the simplified grid
 def cell_dimensions():
@@ -58,11 +68,11 @@ def draw_grid(img, color=(0,255,0), thickness=2):
     
     return img
 
-# cell content extraction
+# cell content extraction with enhanced entropy
 def extract_cell_strats(frame):
     h, w = frame.shape[:2]
     cw, ch = cell_dimensions()
-    stats = np.zeros((GRID_H*GRID_W, 6), dtype=np.float32)
+    stats = np.zeros((GRID_H*GRID_W, 8), dtype=np.float32)  # Extended to include more features
     idx = 0
 
     for gy in range(GRID_H):
@@ -74,39 +84,56 @@ def extract_cell_strats(frame):
             # means/vars per channel
             means = cell.mean(axis=(0,1)) # B, G, R
             vars_ = cell.var(axis=(0,1))
+            
+            # Additional entropy sources
+            gray_cell = cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY)
+            edge_density = cv2.Canny(gray_cell, 50, 150).mean()  # Edge information
+            
+            # Histogram entropy (simplified)
+            hist = cv2.calcHist([gray_cell], [0], None, [16], [0, 256])
+            hist_entropy = -np.sum(hist * np.log2(hist + 1e-10)) / hist.sum()
+            
             stats[idx, 0:3] = means
             stats[idx, 3:6] = vars_
+            stats[idx, 6] = edge_density
+            stats[idx, 7] = hist_entropy
             idx += 1
     return stats
 
 def compute_mean_deltas(curr_stats, prev_stats):
     if prev_stats is None:
-        return np.zeros((GRID_H*GRID_W, 3), dtype=np.float32)
-    return np.abs(curr_stats[:, 0:3] - prev_stats[:, 0:3])
+        return np.zeros((GRID_H*GRID_W, 8), dtype=np.float32)  # Updated for extended features
+    return np.abs(curr_stats - prev_stats)
 
 def lsb_bits_from_int(x, k):
     #return list of k LSBs
     return [(x >> i) & 1 for i in range(k)]
 
-def extract_bits_from_feats(stats, mean_deltas, mean_lsb=2, delta_lsb=2):
-    # stats: (Ncells, 6) floats; mean_deltas: (Ncells, 3) floats
+def extract_bits_from_feats(stats, mean_deltas, mean_lsb=3, delta_lsb=3):
+    # Enhanced bit extraction with more entropy sources
     bits = []
-    # scale factors tuned to spread vals over ints
-    M_SCALE = 1024
-    D_SCALE = 1024
+    # Increased scale factors for better distribution
+    M_SCALE = 2048
+    D_SCALE = 2048
 
-    means = stats[:, 0:3]
-    deltas = mean_deltas
+    # Extract from all features, not just means
+    for feature_idx in range(stats.shape[1]):
+        vals = stats[:, feature_idx]
+        val_ints = (vals * M_SCALE).astype(np.int64)
+        for val in val_ints:
+            bits.extend(lsb_bits_from_int(int(val), mean_lsb))
 
-    #means to ints to LSBs
-    m_int = (means * M_SCALE).astype(np.int64)
-    for val in m_int.flatten():
-        bits.extend(lsb_bits_from_int(int(val), mean_lsb))
-
-    #deltas to ints to LSBs
-    d_int = (deltas * D_SCALE).astype(np.int64)
-    for val in d_int.flatten():
-        bits.extend(lsb_bits_from_int(int(val), delta_lsb))
+    # Extract from all delta features
+    for feature_idx in range(mean_deltas.shape[1]):
+        deltas = mean_deltas[:, feature_idx]
+        delta_ints = (deltas * D_SCALE).astype(np.int64)
+        for val in delta_ints:
+            bits.extend(lsb_bits_from_int(int(val), delta_lsb))
+    
+    # Add timestamp entropy (microsecond precision)
+    timestamp_bits = lsb_bits_from_int(int(time.time() * 1000000) % (2**32), 8)
+    bits.extend(timestamp_bits)
+    
     return bits
 
 def bits_to_bytes(bits):
@@ -131,8 +158,14 @@ def add_frame_to_cycle(cycle_buf, raw_bytes):
     return cycle_buf
 
 def finish_cycle(cycle_buf):
-    #SHA3-256 econditioning for seed
-    seed = hashlib.sha3_256(cycle_buf).digest()
+    # Mix with OS entropy for additional randomness
+    os_entropy = os.urandom(32)  # 256 bits of OS entropy
+    
+    # Combine camera entropy with OS entropy
+    combined_entropy = cycle_buf + os_entropy
+    
+    # Use SHA3-256 for conditioning (cryptographically secure)
+    seed = hashlib.sha3_256(combined_entropy).digest()
     return seed
 
 def frame_passes_variance(frame):
@@ -144,6 +177,25 @@ def cycle_passes_motion(delta_history):
     if not delta_history: return False, 0.0
     avg = sum(delta_history) / len(delta_history)
     return avg >= CYCLE_DELTA_MIN, avg
+
+def assess_entropy_quality(raw_bytes):
+    """Simple entropy assessment for the raw bytes"""
+    if len(raw_bytes) == 0:
+        return 0.0
+    
+    # Calculate Shannon entropy
+    byte_counts = np.bincount(raw_bytes, minlength=256)
+    probabilities = byte_counts / len(raw_bytes)
+    entropy = -np.sum(probabilities * np.log2(probabilities + 1e-10))
+    
+    # Normalize to 0-1 scale (max entropy for uniform distribution is 8 bits)
+    return entropy / 8.0
+
+# Optional: Save raw entropy data for external randomness testing
+def save_entropy_sample(cycle_buf, filename="entropy_sample.bin"):
+    """Save pre-hash bytes for randomness testing"""
+    with open(filename, "ab") as f:
+        f.write(cycle_buf)
 
 def seed_is_new(seed):
     hx = seed.hex()
@@ -162,10 +214,23 @@ print(f"Cells are: {cw}x{ch}")
 #run a loop until input to close
 while True:
     ret, frame = cam.read()
+    if not ret:
+        print("Failed to read frame")
+        break
+        
+    # Resize frame for consistent processing
+    frame = prep_frame(frame)
+    
     out.write(frame)
     if show_grid:
         draw_grid(frame)
     cv2.imshow('Webcam', frame)
+
+    # per frame: drop bad frames early
+    ok_var, var_val = frame_passes_variance(frame)
+    if not ok_var:
+        print(f"[WARN] Low variance frame (var={var_val:.2f}); skipping.")
+        continue
 
     # inter-frame deltas to increase entropy through motion
     stats = extract_cell_strats(frame)
@@ -173,8 +238,15 @@ while True:
     prev_stats = stats
 
     # bits to bytes
-    raw_bits = extract_bits_from_feats(stats, mean_deltas, mean_lsb=2, delta_lsb=2)
+    raw_bits = extract_bits_from_feats(stats, mean_deltas, mean_lsb=3, delta_lsb=3)
     raw_bytes = bits_to_bytes(raw_bits)
+    
+    # Assess entropy quality
+    entropy_quality = assess_entropy_quality(raw_bytes)
+    
+    # Track motion for cycle quality assessment
+    delta_scalar = float(mean_deltas.mean())
+    delta_history.append(delta_scalar)
 
     #cycle in-loop logic
     if frames_this_cycle == 0:
@@ -183,47 +255,32 @@ while True:
     cycle_buf = add_frame_to_cycle(cycle_buf, raw_bytes)
     frames_this_cycle += 1
 
-    # this line also seems to freeze the stream in between frame gaps rather than slowing logic computation down
-    #time.sleep(FRAME_GAP_S)
-
+    # Check if cycle is complete
     if frames_this_cycle >= FRAMES_PER_CYCLE:
-        seed = finish_cycle(cycle_buf)
-        print("Seed (hex): ", seed.hex())
-        # reset timing to stick to the one cycle per min
-        sleep_left = max(0.0, CYCLES_PERIOD_S - FRAMES_PER_CYCLE*FRAME_GAP_S)
-        # THIS SLEEP LINE BELOW CAUSES THE ENTIRE CAMERA TO FREEZE, DOESNT JUST PAUSE THE SEED GENERATION
-        # time.sleep(sleep_left)
+        # Assess cycle quality before generating seed
+        ok_motion, avg_delta = cycle_passes_motion(delta_history)
+        
+        if ok_motion:
+            # Optionally save entropy data for testing
+            if SAVE_ENTROPY_DATA:
+                save_entropy_sample(cycle_buf)
+                
+            seed = finish_cycle(cycle_buf)
+            if seed_is_new(seed):
+                print(f"✓ Seed generated (motion={avg_delta:.3f}, entropy={entropy_quality:.3f}): {seed.hex()}")
+            else:
+                print("[WARN] Seed repeated; discarding.")
+        else:
+            print(f"[WARN] Low motion/entropy this cycle (avg delta {avg_delta:.3f}); discarding.")
+        
+        # Reset for next cycle
         cycle_buf, frames_this_cycle = start_cycle()
+        delta_history = []
         last_cycle_time = time.time()
 
-    delta_history = []
-    # per frame:
-    delta_scalar = float(mean_deltas.mean())
-    delta_history.append(delta_scalar)
-
-    # per frame: drop bad frames
-    ok_var, var_val = frame_passes_variance(frame)
-    if not ok_var:
-        continue
-
-    # on cycle end:
-    ok_motion, avg_delta = cycle_passes_motion(delta_history)
-    if not ok_motion:
-        print(f"[WARN] Low motion/entropy this cycle (avg delta {avg_delta:.3f}); discarding.")
-    else:
-        seed = finish_cycle(cycle_buf)
-        if not seed_is_new(seed):
-            print("[WARN] Seed repeated; discarding.")
-        else:
-            print("Seed (hex):", seed.hex())
-    delta_history = []
-
-    # begins to show cell stats of the top right cell after 10 seconds
-    frame_count = int(cam.get(cv2.CAP_PROP_FRAME_COUNT))
-    if frame_count % 10 == 0:
-        s = extract_cell_strats(frame)
-        print("CELL(0,0) means/vars: ", s[0, :])
-        print("avg mmean-delta per channel: ", mean_deltas.mean(axis=0))
+    # Display diagnostics periodically
+    if frames_this_cycle % 5 == 0:  # Every 5 frames within a cycle
+        print(f"Frame {frames_this_cycle}/{FRAMES_PER_CYCLE}, Motion: {delta_scalar:.3f}, Entropy: {entropy_quality:.3f}")
 
     if cv2.waitKey(1) == ord('g'): # this button press is iffy, sometimes requires double presses
         show_grid = not show_grid
@@ -235,8 +292,16 @@ cam.release()
 out.release()
 cv2.destroyAllWindows()
 
+print(f"\nSession complete. Generated {len(RECENT_SEEDS)} unique seeds.")
 
-# things to add:
-# - mix with OS randomness?
-# - set up camera controls and stability through openCV cam.set
-# - set up a system for dumping pre-hash bytes for 1 min, and run a randomness test on it
+# Additional improvements to consider:
+# X Mix with OS randomness 
+# X Enhanced entropy extraction (edge density, histogram entropy)
+# X Better motion detection and frame quality assessment
+# X Improved bit extraction with more LSBs and higher scaling
+# X Real-time entropy quality monitoring
+# - Adaptive thresholds based on environment
+# - Periodic entropy pool mixing
+# - Multiple hash algorithms (Blake2, Argon2)
+# - Temporal correlation analysis
+# - Spatial correlation analysis within grid cells
