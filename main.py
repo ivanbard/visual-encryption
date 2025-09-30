@@ -190,7 +190,8 @@ while True:
         print("Seed (hex): ", seed.hex())
         # reset timing to stick to the one cycle per min
         sleep_left = max(0.0, CYCLES_PERIOD_S - FRAMES_PER_CYCLE*FRAME_GAP_S)
-        time.sleep(sleep_left)
+        # THIS SLEEP LINE BELOW CAUSES THE ENTIRE CAMERA TO FREEZE, DOESNT JUST PAUSE THE SEED GENERATION
+        # time.sleep(sleep_left)
         cycle_buf, frames_this_cycle = start_cycle()
         last_cycle_time = time.time()
 
