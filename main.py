@@ -183,7 +183,8 @@ while True:
     cycle_buf = add_frame_to_cycle(cycle_buf, raw_bytes)
     frames_this_cycle += 1
 
-    time.sleep(FRAME_GAP_S)
+    # this line also seems to freeze the stream in between frame gaps rather than slowing logic computation down
+    #time.sleep(FRAME_GAP_S)
 
     if frames_this_cycle >= FRAMES_PER_CYCLE:
         seed = finish_cycle(cycle_buf)
