@@ -183,9 +183,12 @@ def assess_entropy_quality(raw_bytes):
     if len(raw_bytes) == 0:
         return 0.0
     
-    # Calculate Shannon entropy
-    byte_counts = np.bincount(raw_bytes, minlength=256)
-    probabilities = byte_counts / len(raw_bytes)
+    # convert bytes to numpy array of integers
+    byte_array = np.frombuffer(raw_bytes, dtype=np.uint8)
+    
+    # calc Shannon entropy
+    byte_counts = np.bincount(byte_array, minlength=256)
+    probabilities = byte_counts / len(byte_array)
     entropy = -np.sum(probabilities * np.log2(probabilities + 1e-10))
     
     # Normalize to 0-1 scale (max entropy for uniform distribution is 8 bits)
@@ -218,10 +221,12 @@ while True:
         print("Failed to read frame")
         break
         
+    # Write original frame to video before resizing
+    out.write(frame)
+    
     # Resize frame for consistent processing
     frame = prep_frame(frame)
     
-    out.write(frame)
     if show_grid:
         draw_grid(frame)
     cv2.imshow('Webcam', frame)
