@@ -6,13 +6,9 @@ from collections import deque
 # using default camera 
 cam = cv2.VideoCapture(0)
 
-# Set camera properties for stability and consistent quality
-cam.set(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)  # Disable auto-exposure for consistency
-cam.set(cv2.CAP_PROP_EXPOSURE, -6)  # Set manual exposure
-cam.set(cv2.CAP_PROP_AUTOFOCUS, 0)  # Disable autofocus
-cam.set(cv2.CAP_PROP_AUTO_WB, 1)  # Keep auto white balance for color diversity
-cam.set(cv2.CAP_PROP_BRIGHTNESS, 128)  # Set consistent brightness
-cam.set(cv2.CAP_PROP_CONTRAST, 128)  # Set consistent contrast
+# use auto for camera properties for better visibility
+cam.set(cv2.CAP_PROP_AUTOFOCUS, 0)  # disable autofocus for stability
+cam.set(cv2.CAP_PROP_FPS, 30)
 
 frame_width = int(cam.get(cv2.CAP_PROP_FRAME_WIDTH))
 frame_height = int(cam.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -32,9 +28,10 @@ FRAME_GAP_S = 0.2
 CYCLES_PERIOD_S = 60.0
 
 FRAME_VAR_MIN = 5.0 # global variance below this means a bad frame (too similar colors)
-CYCLE_DELTA_MIN = 0.5 # mean delta per channel lower than this means bad cycle if shared between frames
+CYCLE_DELTA_MIN = 0.1 # mean delta per channel lower than this means bad cycle (lowered for fast mode)
 RECENT_SEEDS = deque(maxlen=50)
 SAVE_ENTROPY_DATA = False  # Set to True to save raw entropy for testing
+ENABLE_ADVANCED_ENTROPY = False  # Set to True for edge/histogram entropy (slower but more entropy)
 
 show_grid = True
 prev_stats = None
@@ -42,7 +39,7 @@ prev_stats = None
 cycle_buf = bytearray()
 frames_this_cycle = 0
 last_cycle_time = time.time()
-delta_history = []  # Move this outside the loop
+delta_history = []  # move this outside the loop
 
 def prep_frame(frame):
     return cv2.resize(frame, (PROC_W, PROC_H), interpolation=cv2.INTER_AREA)
@@ -72,7 +69,10 @@ def draw_grid(img, color=(0,255,0), thickness=2):
 def extract_cell_strats(frame):
     h, w = frame.shape[:2]
     cw, ch = cell_dimensions()
-    stats = np.zeros((GRID_H*GRID_W, 8), dtype=np.float32)  # Extended to include more features
+    
+    # Use basic 6-feature mode for speed, or 8-feature for more entropy
+    num_features = 8 if ENABLE_ADVANCED_ENTROPY else 6
+    stats = np.zeros((GRID_H*GRID_W, num_features), dtype=np.float32)
     idx = 0
 
     for gy in range(GRID_H):
@@ -81,28 +81,32 @@ def extract_cell_strats(frame):
             x0, x1 = gx*cw, (gx+1)*cw
             cell = frame[y0:y1, x0:x1]
 
-            # means/vars per channel
+            # means/vars per channel (always calculated - fast)
             means = cell.mean(axis=(0,1)) # B, G, R
             vars_ = cell.var(axis=(0,1))
             
-            # Additional entropy sources
-            gray_cell = cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY)
-            edge_density = cv2.Canny(gray_cell, 50, 150).mean()  # Edge information
-            
-            # Histogram entropy (simplified)
-            hist = cv2.calcHist([gray_cell], [0], None, [16], [0, 256])
-            hist_entropy = -np.sum(hist * np.log2(hist + 1e-10)) / hist.sum()
-            
             stats[idx, 0:3] = means
             stats[idx, 3:6] = vars_
-            stats[idx, 6] = edge_density
-            stats[idx, 7] = hist_entropy
+            
+            # Additional entropy sources (optional, slower)
+            if ENABLE_ADVANCED_ENTROPY:
+                gray_cell = cv2.cvtColor(cell, cv2.COLOR_BGR2GRAY)
+                edge_density = cv2.Canny(gray_cell, 50, 150).mean()  # Edge information
+                
+                # Histogram entropy (simplified)
+                hist = cv2.calcHist([gray_cell], [0], None, [16], [0, 256])
+                hist_entropy = -np.sum(hist * np.log2(hist + 1e-10)) / hist.sum()
+                
+                stats[idx, 6] = edge_density
+                stats[idx, 7] = hist_entropy
+            
             idx += 1
     return stats
 
 def compute_mean_deltas(curr_stats, prev_stats):
     if prev_stats is None:
-        return np.zeros((GRID_H*GRID_W, 8), dtype=np.float32)  # Updated for extended features
+        num_features = 8 if ENABLE_ADVANCED_ENTROPY else 6
+        return np.zeros((GRID_H*GRID_W, num_features), dtype=np.float32)
     return np.abs(curr_stats - prev_stats)
 
 def lsb_bits_from_int(x, k):
@@ -213,6 +217,12 @@ out = cv2.VideoWriter('output.mp4', fourcc, 20.0, (frame_width, frame_height))
 cw, ch = cell_dimensions()
 print(f"Process dims: {PROC_W} x {PROC_H}")
 print(f"Cells are: {cw}x{ch}")
+print(f"Advanced entropy features: {'ENABLED' if ENABLE_ADVANCED_ENTROPY else 'DISABLED (fast mode)'}")
+print(f"Camera FPS: {cam.get(cv2.CAP_PROP_FPS)}")
+print("\nPress 'g' to toggle grid, 'q' to quit, 'a' to toggle advanced entropy\n")
+
+frame_counter = 0
+last_fps_time = time.time()
 
 #run a loop until input to close
 while True:
@@ -220,8 +230,17 @@ while True:
     if not ret:
         print("Failed to read frame")
         break
+    
+    frame_counter += 1
+    
+    # display FPS every 30 frames
+    if frame_counter % 30 == 0:
+        current_time = time.time()
+        fps = 30 / (current_time - last_fps_time)
+        last_fps_time = current_time
+        print(f"[Performance] FPS: {fps:.1f}")
         
-    # Write original frame to video before resizing
+    # write original frame to video before resizing
     out.write(frame)
     
     # Resize frame for consistent processing
@@ -272,24 +291,29 @@ while True:
                 
             seed = finish_cycle(cycle_buf)
             if seed_is_new(seed):
-                print(f"✓ Seed generated (motion={avg_delta:.3f}, entropy={entropy_quality:.3f}): {seed.hex()}")
+                print(f"Seed: {seed.hex()[:32]}... (motion={avg_delta:.2f}, entropy={entropy_quality:.3f})")
             else:
                 print("[WARN] Seed repeated; discarding.")
         else:
-            print(f"[WARN] Low motion/entropy this cycle (avg delta {avg_delta:.3f}); discarding.")
+            print(f"[WARN] Low motion this cycle (avg delta {avg_delta:.2f}); discarding.")
         
         # Reset for next cycle
         cycle_buf, frames_this_cycle = start_cycle()
         delta_history = []
         last_cycle_time = time.time()
 
-    # Display diagnostics periodically
-    if frames_this_cycle % 5 == 0:  # Every 5 frames within a cycle
-        print(f"Frame {frames_this_cycle}/{FRAMES_PER_CYCLE}, Motion: {delta_scalar:.3f}, Entropy: {entropy_quality:.3f}")
+    # reduced diagnostic output for better performance - only on first frame of cycle
+    if frames_this_cycle == 1:
+        print(f"Starting cycle... (motion: {delta_scalar:.2f}, entropy: {entropy_quality:.3f})")
 
-    if cv2.waitKey(1) == ord('g'): # this button press is iffy, sometimes requires double presses
+    key = cv2.waitKey(1)
+    if key == ord('g'):
         show_grid = not show_grid
-    elif cv2.waitKey(1) == ord('q'): #press q to exit
+        print(f"Grid display: {'ON' if show_grid else 'OFF'}")
+    elif key == ord('a'):
+        ENABLE_ADVANCED_ENTROPY = not ENABLE_ADVANCED_ENTROPY
+        print(f"Advanced entropy: {'ENABLED (slower, more entropy)' if ENABLE_ADVANCED_ENTROPY else 'DISABLED (faster)'}")
+    elif key == ord('q'):
         break
 
 # release capture and writers
