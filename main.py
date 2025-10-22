@@ -243,21 +243,23 @@ while True:
     # write original frame to video before resizing
     out.write(frame)
     
-    # Resize frame for consistent processing
-    frame = prep_frame(frame)
+    # separate ouput display and a processing display
+    display_frame = frame.copy()
     
-    if show_grid:
-        draw_grid(frame)
-    cv2.imshow('Webcam', frame)
+    # resize ONLY processing frame
+    processed_frame = prep_frame(frame)
 
     # per frame: drop bad frames early
-    ok_var, var_val = frame_passes_variance(frame)
+    ok_var, var_val = frame_passes_variance(processed_frame)
     if not ok_var:
         print(f"[WARN] Low variance frame (var={var_val:.2f}); skipping.")
+        if show_grid:
+            draw_grid(display_frame)
+        cv2.imshow('Webcam', display_frame)
         continue
 
     # inter-frame deltas to increase entropy through motion
-    stats = extract_cell_strats(frame)
+    stats = extract_cell_strats(processed_frame)
     mean_deltas = compute_mean_deltas(stats, prev_stats)
     prev_stats = stats
 
@@ -271,6 +273,18 @@ while True:
     # Track motion for cycle quality assessment
     delta_scalar = float(mean_deltas.mean())
     delta_history.append(delta_scalar)
+
+    # draw grid on original frame for display
+    if show_grid:
+        h, w = display_frame.shape[:2]
+        for gx in range(1, GRID_W):
+            x = int(gx * w / GRID_W)
+            cv2.line(display_frame, (x, 0), (x, h), (0,255,0), 2)
+        for gy in range(1, GRID_H):
+            y = int(gy * h / GRID_H)
+            cv2.line(display_frame, (0, y), (w, y), (0,255,0), 2)
+    
+    cv2.imshow('Webcam', display_frame)
 
     #cycle in-loop logic
     if frames_this_cycle == 0:
